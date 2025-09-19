@@ -212,3 +212,119 @@
         (map-get? player-dungeon-stats { player: player })
     ))
 )
+
+;; Check if player can enter dungeon
+(define-read-only (can-enter-dungeon (player principal))
+    (let
+        (
+            (current-block (get-current-block))
+            (player-stats (default-to 
+                {
+                    last-dungeon-block: u0,
+                    last-entry-block: u0,
+                    total-dungeons-completed: u0, 
+                    total-rewards-earned: u0,
+                    is-in-dungeon: false
+                } 
+                (map-get? player-dungeon-stats { player: player })
+            ))
+        )
+        (ok (and
+            (var-get game-active)
+            (not (get is-in-dungeon player-stats))
+            (>= current-block 
+                (+ (get last-entry-block player-stats) DUNGEON-COOLDOWN-BLOCKS))
+        ))
+    )
+)
+
+;; Get global game statistics
+(define-read-only (get-game-stats (stat-type (string-ascii 20)))
+    (ok (default-to u0 
+        (get value (map-get? game-stats { stat-type: stat-type }))
+    ))
+)
+
+;; Get contract configuration
+(define-read-only (get-game-config)
+    (ok {
+        entry-cost: ENTRY-COST,
+        reward-amount: REWARD-AMOUNT,
+        cooldown-blocks: DUNGEON-COOLDOWN-BLOCKS,
+        allowed-token: (var-get allowed-token),
+        game-active: (var-get game-active),
+        contract-owner: (var-get contract-owner)
+    })
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Toggle game active state
+(define-public (toggle-game-state)
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-CONTRACT-OWNER)
+        (var-set game-active (not (var-get game-active)))
+        (ok (var-get game-active))
+    )
+)
+
+;; Update the allowed token for the dungeon
+(define-public (set-allowed-token (new-token principal))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-CONTRACT-OWNER)
+        (asserts! (not (is-eq new-token (var-get allowed-token))) ERR-INVALID-PRINCIPAL)
+        (var-set allowed-token new-token)
+        (ok true)
+    )
+)
+
+;; Emergency function to reset player dungeon state
+(define-public (emergency-reset-player (player principal))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-CONTRACT-OWNER)
+        (asserts! (not (is-eq player (var-get contract-owner))) ERR-INVALID-PRINCIPAL)
+        (asserts! (not (is-eq player (as-contract tx-sender))) ERR-INVALID-PRINCIPAL)
+        (map-delete player-dungeon-stats { player: player })
+        (ok true)
+    )
+)
+
+;; OWNERSHIP MANAGEMENT
+
+;; Initiate secure two-step ownership transfer
+(define-public (initiate-ownership-transfer (new-owner principal))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-CONTRACT-OWNER)
+        (asserts! (is-valid-principal new-owner) ERR-INVALID-PRINCIPAL)
+        (var-set pending-owner (some new-owner))
+        (ok true)
+    )
+)
+
+;; Accept pending ownership transfer
+(define-public (accept-ownership)
+    (let 
+        ((pending (unwrap! (var-get pending-owner) ERR-PENDING-OWNER-ONLY)))
+        (asserts! (is-eq tx-sender pending) ERR-UNAUTHORIZED)
+        (var-set contract-owner pending)
+        (var-set pending-owner none)
+        (ok true)
+    )
+)
+
+;; Cancel pending ownership transfer
+(define-public (cancel-ownership-transfer)
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-CONTRACT-OWNER)
+        (var-set pending-owner none)
+        (ok true)
+    )
+)
+
+;; Get current and pending owner information
+(define-read-only (get-ownership-info)
+    (ok {
+        current-owner: (var-get contract-owner),
+        pending-owner: (var-get pending-owner)
+    })
+)
