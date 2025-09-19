@@ -98,3 +98,117 @@
         )
     )
 )
+
+;; PUBLIC GAME FUNCTIONS
+
+;; Enter the dungeon with comprehensive validation
+(define-public (enter-dungeon (token <token-trait>) (player principal))
+    (let 
+        (
+            (player-balance (unwrap! (contract-call? token get-balance player) ERR-INSUFFICIENT-BALANCE))
+            (current-block (get-current-block))
+            (player-stats (default-to 
+                {
+                    last-dungeon-block: u0,
+                    last-entry-block: u0,
+                    total-dungeons-completed: u0, 
+                    total-rewards-earned: u0,
+                    is-in-dungeon: false
+                } 
+                (map-get? player-dungeon-stats { player: player })
+            ))
+        )
+        ;; Validation checks
+        (asserts! (var-get game-active) ERR-UNAUTHORIZED)
+        (asserts! (is-eq tx-sender player) ERR-UNAUTHORIZED)
+        (asserts! (is-valid-token token) ERR-INVALID-TOKEN)
+        (asserts! (>= player-balance ENTRY-COST) ERR-INSUFFICIENT-BALANCE)
+        (asserts! (not (get is-in-dungeon player-stats)) ERR-UNAUTHORIZED)
+        
+        ;; Check cooldown period
+        (asserts! 
+            (>= current-block 
+                (+ (get last-entry-block player-stats) DUNGEON-COOLDOWN-BLOCKS)
+            ) 
+            ERR-DUNGEON-COOLDOWN
+        )
+
+        ;; Update player stats - mark as entered dungeon
+        (map-set player-dungeon-stats 
+            { player: player }
+            {
+                last-dungeon-block: (get last-dungeon-block player-stats),
+                last-entry-block: current-block,
+                total-dungeons-completed: (get total-dungeons-completed player-stats),
+                total-rewards-earned: (get total-rewards-earned player-stats),
+                is-in-dungeon: true
+            }
+        )
+
+        ;; Update global statistics
+        (update-global-stats "total-entries" u1)
+        
+        (ok true)
+    )
+)
+
+;; Complete dungeon challenge and claim reward
+(define-public (complete-dungeon (token <token-trait>) (player principal))
+    (let
+        (
+            (current-block (get-current-block))
+            (player-stats (unwrap! 
+                (map-get? player-dungeon-stats { player: player })
+                ERR-DUNGEON-NOT-ENTERED
+            ))
+        )
+        ;; Validation checks
+        (asserts! (var-get game-active) ERR-UNAUTHORIZED)
+        (asserts! (is-eq tx-sender player) ERR-UNAUTHORIZED)
+        (asserts! (is-valid-token token) ERR-INVALID-TOKEN)
+        (asserts! (get is-in-dungeon player-stats) ERR-DUNGEON-NOT-ENTERED)
+        (asserts! (> REWARD-AMOUNT u0) ERR-ZERO-AMOUNT)
+
+        ;; Transfer reward tokens to player
+        (try! (as-contract 
+            (contract-call? token transfer
+                tx-sender
+                player
+                REWARD-AMOUNT)
+        ))
+
+        ;; Update player dungeon statistics
+        (map-set player-dungeon-stats 
+            { player: player }
+            {
+                last-dungeon-block: current-block,
+                last-entry-block: (get last-entry-block player-stats),
+                total-dungeons-completed: (+ (get total-dungeons-completed player-stats) u1),
+                total-rewards-earned: (+ (get total-rewards-earned player-stats) REWARD-AMOUNT),
+                is-in-dungeon: false
+            }
+        )
+
+        ;; Update global statistics
+        (update-global-stats "total-completions" u1)
+        (update-global-stats "rewards-distributed" REWARD-AMOUNT)
+
+        (ok true)
+    )
+)
+
+;; READ-ONLY FUNCTIONS
+
+;; Get comprehensive player statistics
+(define-read-only (get-player-stats (player principal))
+    (ok (default-to 
+        {
+            last-dungeon-block: u0,
+            last-entry-block: u0,
+            total-dungeons-completed: u0, 
+            total-rewards-earned: u0,
+            is-in-dungeon: false
+        }
+        (map-get? player-dungeon-stats { player: player })
+    ))
+)
